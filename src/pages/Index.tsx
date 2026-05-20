@@ -43,6 +43,7 @@ export default function Index() {
   const [uploadingName, setUploadingName] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<FileItem | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const showNotification = (msg: string) => {
@@ -100,6 +101,17 @@ export default function Index() {
     navigator.clipboard?.writeText(link).catch(() => {});
     showNotification(`Ссылка на «${fileName}» скопирована!`);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleDelete = (file: FileItem) => {
+    setDeleteConfirm(file);
+  };
+
+  const confirmDelete = () => {
+    if (!deleteConfirm) return;
+    setFiles(f => f.filter(file => file.id !== deleteConfirm.id));
+    showNotification(`«${deleteConfirm.name}» удалён`);
+    setDeleteConfirm(null);
   };
 
   const copyLink = (file: FileItem) => {
@@ -382,12 +394,45 @@ export default function Index() {
                   <button className="w-8 h-8 rounded-lg glass flex items-center justify-center transition-all hover:border-white/20 hover:text-white/80 text-white/40">
                     <Icon name="Download" size={14} />
                   </button>
-                  <button className="w-8 h-8 rounded-lg glass flex items-center justify-center transition-all hover:border-red-500/30 hover:text-red-400 text-white/40">
+                  <button
+                    onClick={() => handleDelete(file)}
+                    className="w-8 h-8 rounded-lg glass flex items-center justify-center transition-all hover:border-red-500/30 hover:text-red-400 text-white/40"
+                  >
                     <Icon name="Trash2" size={14} />
                   </button>
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+      {/* Delete confirmation modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }}>
+          <div className="glass rounded-2xl p-8 max-w-sm w-full animate-scale-in" style={{ borderColor: "rgba(255,77,77,0.3)", boxShadow: "0 0 40px rgba(255,77,77,0.1)" }}>
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-5" style={{ background: "rgba(255,77,77,0.1)" }}>
+              <Icon name="Trash2" size={26} style={{ color: "#ff4d4d" }} />
+            </div>
+            <h3 className="text-xl font-bold text-center mb-2" style={{ fontFamily: "Oswald, sans-serif" }}>Удалить файл?</h3>
+            <p className="text-white/50 text-sm text-center mb-6 leading-relaxed">
+              «<span className="text-white/80">{deleteConfirm.name}</span>» будет удалён безвозвратно
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="flex-1 px-4 py-3 rounded-xl text-sm font-semibold glass transition-all hover:border-white/20"
+                style={{ color: "rgba(255,255,255,0.6)" }}
+              >
+                Отмена
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="flex-1 px-4 py-3 rounded-xl text-sm font-semibold transition-all hover:scale-105"
+                style={{ background: "#ff4d4d", color: "white", boxShadow: "0 0 20px rgba(255,77,77,0.3)" }}
+              >
+                Удалить
+              </button>
+            </div>
           </div>
         </div>
       )}
