@@ -1,0 +1,10 @@
+{
+  "tests": [
+    {
+      "name": "Delete without ID returns 400",
+      "method": "DELETE",
+      "path": "/",
+      "expectedStatus": 400
+    }
+  ]
+}
