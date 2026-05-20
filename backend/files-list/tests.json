@@ -1,12 +1,10 @@
 {
   "tests": [
     {
-      "name": "Get files list",
+      "name": "No auth returns 401",
       "method": "GET",
       "path": "/",
-      "expectedStatus": 200,
-      "expectedBody": {"files": []},
-      "bodyMatcher": "partial"
+      "expectedStatus": 401
     }
   ]
 }

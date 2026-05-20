@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import Icon from "@/components/ui/icon";
 
 type Page = "home" | "upload" | "files";
+type AuthPage = "login" | "register";
 
 interface FileItem {
   id: string;
@@ -13,8 +14,15 @@ interface FileItem {
   created_at: string;
 }
 
+interface User {
+  id: string;
+  email: string;
+  name: string;
+}
+
+const API_AUTH   = "https://functions.poehali.dev/9328bf48-9ea6-4767-a049-7742f6555962";
 const API_UPLOAD = "https://functions.poehali.dev/94290466-4cfc-4f2d-a557-972f80d884af";
-const API_LIST = "https://functions.poehali.dev/4f7f5f03-b426-4537-b544-841e547d62ca";
+const API_LIST   = "https://functions.poehali.dev/4f7f5f03-b426-4537-b544-841e547d62ca";
 const API_DELETE = "https://functions.poehali.dev/1f89adf4-3099-43e2-9cee-45da626d0219";
 
 function formatSize(bytes: number): string {
@@ -25,8 +33,7 @@ function formatSize(bytes: number): string {
 }
 
 function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  return new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
 }
 
 function getFileExt(name: string): string {
@@ -54,15 +61,22 @@ function getFileIcon(name: string): string {
   if (["mp4","mov","avi","mkv"].includes(ext)) return "Video";
   if (["mp3","wav","flac","ogg"].includes(ext)) return "Music";
   if (["zip","rar","7z","tar","gz"].includes(ext)) return "Archive";
-  if (["pdf"].includes(ext)) return "FileText";
-  if (["doc","docx"].includes(ext)) return "FileText";
+  if (["pdf","doc","docx"].includes(ext)) return "FileText";
   if (["xls","xlsx","csv"].includes(ext)) return "FileSpreadsheet";
   if (["ppt","pptx"].includes(ext)) return "FilePresentation";
   return "File";
 }
 
+function authHeaders(token: string) {
+  return { "Content-Type": "application/json", "Authorization": `Bearer ${token}` };
+}
+
 export default function Index() {
   const [page, setPage] = useState<Page>("home");
+  const [authPage, setAuthPage] = useState<AuthPage>("login");
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string>(() => localStorage.getItem("ams_token") || "");
+
   const [files, setFiles] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -74,15 +88,66 @@ export default function Index() {
   const [deleting, setDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("ams_user");
+    const savedToken = localStorage.getItem("ams_token");
+    if (saved && savedToken) {
+      setUser(JSON.parse(saved));
+      setToken(savedToken);
+    }
+  }, []);
+
   const showNotification = (msg: string) => {
     setNotification(msg);
     setTimeout(() => setNotification(null), 3000);
   };
 
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const body: Record<string, string> = { action: authPage, email: authEmail, password: authPassword };
+      if (authPage === "register") body.name = authName;
+      const res = await fetch(API_AUTH, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) { setAuthError(data.error || "Ошибка"); return; }
+      localStorage.setItem("ams_token", data.token);
+      localStorage.setItem("ams_user", JSON.stringify(data.user));
+      setToken(data.token);
+      setUser(data.user);
+      showNotification(`Добро пожаловать, ${data.user.name}!`);
+    } catch {
+      setAuthError("Ошибка соединения");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("ams_token");
+    localStorage.removeItem("ams_user");
+    setUser(null);
+    setToken("");
+    setFiles([]);
+    setPage("home");
+  };
+
   const loadFiles = async () => {
     setLoading(true);
     try {
-      const res = await fetch(API_LIST);
+      const res = await fetch(API_LIST, { headers: authHeaders(token) });
       const data = await res.json();
       setFiles(data.files || []);
     } catch {
@@ -93,13 +158,12 @@ export default function Index() {
   };
 
   useEffect(() => {
-    if (page === "files") loadFiles();
-  }, [page]);
+    if (page === "files" && token) loadFiles();
+  }, [page, token]);
 
   const uploadFile = async (file: File) => {
     setUploadingName(file.name);
     setUploadProgress(10);
-
     const reader = new FileReader();
     reader.onload = async (e) => {
       const base64 = (e.target?.result as string).split(",")[1];
@@ -107,11 +171,11 @@ export default function Index() {
       try {
         const res = await fetch(API_UPLOAD, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders(token),
           body: JSON.stringify({ file: base64, name: file.name, mime_type: file.type || "application/octet-stream" }),
         });
         setUploadProgress(90);
-        if (!res.ok) throw new Error("upload failed");
+        if (!res.ok) throw new Error();
         setUploadProgress(100);
         setTimeout(() => {
           setUploadProgress(null);
@@ -133,7 +197,7 @@ export default function Index() {
     setIsDragging(false);
     const file = e.dataTransfer.files[0];
     if (file) uploadFile(file);
-  }, []);
+  }, [token]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -153,7 +217,7 @@ export default function Index() {
   const copyLink = (file: FileItem) => {
     navigator.clipboard?.writeText(file.share_token || "").catch(() => {});
     setCopiedId(file.id);
-    showNotification("Ссылка скопирована в буфер обмена!");
+    showNotification("Ссылка скопирована!");
     setTimeout(() => setCopiedId(null), 2000);
   };
 
@@ -163,7 +227,7 @@ export default function Index() {
     if (!deleteConfirm) return;
     setDeleting(true);
     try {
-      await fetch(`${API_DELETE}?id=${deleteConfirm.id}`, { method: "DELETE" });
+      await fetch(`${API_DELETE}?id=${deleteConfirm.id}`, { method: "DELETE", headers: authHeaders(token) });
       setFiles(f => f.filter(file => file.id !== deleteConfirm.id));
       showNotification(`«${deleteConfirm.name}» удалён`);
     } catch {
@@ -175,14 +239,99 @@ export default function Index() {
   };
 
   const totalSize = files.reduce((acc, f) => acc + f.size, 0);
-  const sharedCount = files.filter(f => f.shared).length;
 
+  // AUTH SCREEN
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-mesh flex items-center justify-center px-4">
+        <div className="w-full max-w-md animate-scale-in">
+          <div className="text-center mb-8">
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4 animate-pulse-glow"
+              style={{ background: "linear-gradient(135deg, var(--neon-green), var(--neon-blue))" }}>
+              <Icon name="Cloud" size={28} className="text-black" />
+            </div>
+            <h1 className="text-4xl font-bold" style={{ fontFamily: "Oswald, sans-serif" }}>
+              AMS<span style={{ color: "var(--neon-green)" }}>Drive</span>
+            </h1>
+            <p className="text-white/40 text-sm mt-1">Облачное хранилище</p>
+          </div>
+
+          <div className="glass rounded-2xl p-8">
+            <div className="flex glass rounded-xl p-1 mb-7">
+              {(["login", "register"] as AuthPage[]).map((tab) => (
+                <button key={tab} onClick={() => { setAuthPage(tab); setAuthError(""); }}
+                  className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all"
+                  style={authPage === tab ? { background: "var(--neon-green)", color: "#0a0e14" } : { color: "rgba(255,255,255,0.45)" }}>
+                  {tab === "login" ? "Войти" : "Регистрация"}
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={handleAuth} className="flex flex-col gap-4">
+              {authPage === "register" && (
+                <div>
+                  <label className="text-xs text-white/40 mb-1.5 block">Ваше имя</label>
+                  <input type="text" value={authName} onChange={e => setAuthName(e.target.value)}
+                    placeholder="Иван Иванов" required
+                    className="w-full px-4 py-3 rounded-xl text-sm outline-none transition-all"
+                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "white" }}
+                    onFocus={e => e.target.style.borderColor = "rgba(0,255,136,0.5)"}
+                    onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.1)"} />
+                </div>
+              )}
+              <div>
+                <label className="text-xs text-white/40 mb-1.5 block">Email</label>
+                <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)}
+                  placeholder="you@example.com" required
+                  className="w-full px-4 py-3 rounded-xl text-sm outline-none transition-all"
+                  style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "white" }}
+                  onFocus={e => e.target.style.borderColor = "rgba(0,255,136,0.5)"}
+                  onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.1)"} />
+              </div>
+              <div>
+                <label className="text-xs text-white/40 mb-1.5 block">Пароль</label>
+                <div className="relative">
+                  <input type={showPassword ? "text" : "password"} value={authPassword}
+                    onChange={e => setAuthPassword(e.target.value)} placeholder="••••••••" required minLength={6}
+                    className="w-full px-4 py-3 pr-11 rounded-xl text-sm outline-none transition-all"
+                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "white" }}
+                    onFocus={e => e.target.style.borderColor = "rgba(0,255,136,0.5)"}
+                    onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.1)"} />
+                  <button type="button" onClick={() => setShowPassword(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors">
+                    <Icon name={showPassword ? "EyeOff" : "Eye"} size={16} />
+                  </button>
+                </div>
+              </div>
+
+              {authError && (
+                <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm"
+                  style={{ background: "rgba(255,77,77,0.1)", border: "1px solid rgba(255,77,77,0.25)", color: "#ff6b6b" }}>
+                  <Icon name="AlertCircle" size={14} />
+                  {authError}
+                </div>
+              )}
+
+              <button type="submit" disabled={authLoading}
+                className="w-full py-3.5 rounded-xl font-semibold text-sm transition-all hover:scale-[1.02] disabled:opacity-60 flex items-center justify-center gap-2 mt-1"
+                style={{ background: "var(--neon-green)", color: "#0a0e14", boxShadow: "0 0 25px rgba(0,255,136,0.3)" }}>
+                {authLoading ? <Icon name="Loader" size={16} /> : <Icon name={authPage === "login" ? "LogIn" : "UserPlus"} size={16} />}
+                {authLoading ? "Загрузка..." : authPage === "login" ? "Войти" : "Создать аккаунт"}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // MAIN APP
   return (
     <div className="min-h-screen bg-mesh">
-      {/* Notification */}
       {notification && (
         <div className="fixed top-6 right-6 z-50 animate-scale-in">
-          <div className="glass px-5 py-3 rounded-xl flex items-center gap-3" style={{ borderColor: "rgba(0,255,136,0.4)", boxShadow: "0 0 20px rgba(0,255,136,0.15)" }}>
+          <div className="glass px-5 py-3 rounded-xl flex items-center gap-3"
+            style={{ borderColor: "rgba(0,255,136,0.4)", boxShadow: "0 0 20px rgba(0,255,136,0.15)" }}>
             <Icon name="CheckCircle" size={18} style={{ color: "var(--neon-green)" }} />
             <span className="text-sm font-medium">{notification}</span>
           </div>
@@ -193,7 +342,8 @@ export default function Index() {
       <nav className="sticky top-0 z-40 glass border-b border-white/5">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3 cursor-pointer" onClick={() => setPage("home")}>
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center animate-pulse-glow" style={{ background: "linear-gradient(135deg, var(--neon-green), var(--neon-blue))" }}>
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center animate-pulse-glow"
+              style={{ background: "linear-gradient(135deg, var(--neon-green), var(--neon-blue))" }}>
               <Icon name="Cloud" size={16} className="text-black" />
             </div>
             <span className="font-bold text-lg tracking-wide" style={{ fontFamily: "Oswald, sans-serif" }}>
@@ -206,14 +356,9 @@ export default function Index() {
               const labels: Record<Page, string> = { home: "Главная", upload: "Загрузка", files: "Мои файлы" };
               const icons: Record<Page, string> = { home: "Home", upload: "Upload", files: "FolderOpen" };
               return (
-                <button
-                  key={p}
-                  onClick={() => setPage(p)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                    page === p ? "text-black" : "text-white/50 hover:text-white/80"
-                  }`}
-                  style={page === p ? { background: "var(--neon-green)", boxShadow: "0 0 15px rgba(0,255,136,0.4)" } : {}}
-                >
+                <button key={p} onClick={() => setPage(p)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${page === p ? "text-black" : "text-white/50 hover:text-white/80"}`}
+                  style={page === p ? { background: "var(--neon-green)", boxShadow: "0 0 15px rgba(0,255,136,0.4)" } : {}}>
                   <Icon name={icons[p]} size={14} />
                   <span className="hidden sm:inline">{labels[p]}</span>
                 </button>
@@ -221,8 +366,12 @@ export default function Index() {
             })}
           </div>
 
-          <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold" style={{ background: "linear-gradient(135deg, var(--neon-blue), var(--neon-purple))", color: "white" }}>
-            А
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-white/50 hidden sm:block">{user.name}</span>
+            <button onClick={handleLogout} title="Выйти"
+              className="w-8 h-8 rounded-full flex items-center justify-center text-white/40 hover:text-red-400 glass transition-all hover:border-red-500/30">
+              <Icon name="LogOut" size={14} />
+            </button>
           </div>
         </div>
       </nav>
@@ -231,34 +380,26 @@ export default function Index() {
       {page === "home" && (
         <div className="max-w-6xl mx-auto px-6 py-20">
           <div className="text-center mb-24 animate-fade-in">
-            <div className="inline-flex items-center gap-2 glass rounded-full px-4 py-2 text-sm mb-8" style={{ borderColor: "rgba(0,255,136,0.3)", color: "var(--neon-green)" }}>
+            <div className="inline-flex items-center gap-2 glass rounded-full px-4 py-2 text-sm mb-8"
+              style={{ borderColor: "rgba(0,255,136,0.3)", color: "var(--neon-green)" }}>
               <Icon name="Zap" size={14} />
-              <span>Новое поколение хранилища</span>
+              <span>Привет, {user.name}!</span>
             </div>
             <h1 className="text-6xl md:text-8xl font-bold leading-tight mb-6 tracking-tight">
-              Храни.{" "}
-              <span className="neon-text">Делись.</span>
-              <br />
-              Управляй.
+              Храни.{" "}<span className="neon-text">Делись.</span><br />Управляй.
             </h1>
             <p className="text-xl text-white/50 max-w-xl mx-auto mb-10 leading-relaxed">
-              Облачное хранилище нового уровня. Загружай файлы и мгновенно делись ссылками с кем угодно.
+              Твоё личное облачное хранилище. Загружай файлы и мгновенно делись ссылками.
             </p>
             <div className="flex items-center justify-center gap-4 flex-wrap">
-              <button
-                onClick={() => setPage("upload")}
+              <button onClick={() => setPage("upload")}
                 className="flex items-center gap-2 px-8 py-4 rounded-xl font-semibold text-base transition-all duration-200 hover:scale-105"
-                style={{ background: "var(--neon-green)", color: "#0a0e14", boxShadow: "0 0 30px rgba(0,255,136,0.4)" }}
-              >
-                <Icon name="Upload" size={18} />
-                Загрузить файл
+                style={{ background: "var(--neon-green)", color: "#0a0e14", boxShadow: "0 0 30px rgba(0,255,136,0.4)" }}>
+                <Icon name="Upload" size={18} />Загрузить файл
               </button>
-              <button
-                onClick={() => setPage("files")}
-                className="flex items-center gap-2 px-8 py-4 rounded-xl font-semibold text-base glass glass-hover"
-              >
-                <Icon name="FolderOpen" size={18} />
-                Мои файлы
+              <button onClick={() => setPage("files")}
+                className="flex items-center gap-2 px-8 py-4 rounded-xl font-semibold text-base glass glass-hover">
+                <Icon name="FolderOpen" size={18} />Мои файлы
               </button>
             </div>
           </div>
@@ -267,7 +408,7 @@ export default function Index() {
             {[
               { val: "15 ГБ", label: "Место в хранилище", icon: "HardDrive", color: "var(--neon-green)" },
               { val: `${files.length}`, label: "Файлов загружено", icon: "Files", color: "var(--neon-blue)" },
-              { val: `${sharedCount}`, label: "Поделились ссылками", icon: "Share2", color: "var(--neon-purple)" },
+              { val: formatSize(totalSize), label: "Занято места", icon: "Database", color: "var(--neon-purple)" },
             ].map((stat, i) => (
               <div key={i} className="glass glass-hover rounded-2xl p-6 text-center">
                 <div className="w-10 h-10 rounded-xl mx-auto mb-3 flex items-center justify-center" style={{ background: `${stat.color}18` }}>
@@ -281,15 +422,15 @@ export default function Index() {
 
           <div className="grid md:grid-cols-3 gap-6 animate-fade-in delay-300">
             {[
-              { icon: "Upload", title: "Быстрая загрузка", desc: "Drag & drop или выбор файла. Поддержка любых форматов до 2 ГБ.", color: "var(--neon-green)" },
-              { icon: "Link", title: "Ссылки для шаринга", desc: "Одним кликом создай ссылку и отправь любому человеку без регистрации.", color: "var(--neon-blue)" },
-              { icon: "Shield", title: "Надёжное хранение", desc: "Файлы хранятся в зашифрованном виде и доступны 24/7 из любой точки мира.", color: "var(--neon-purple)" },
+              { icon: "Upload", title: "Быстрая загрузка", desc: "Drag & drop или выбор файла. Поддержка любых форматов.", color: "var(--neon-green)" },
+              { icon: "Link", title: "Ссылки для шаринга", desc: "Одним кликом создай ссылку и отправь любому человеку.", color: "var(--neon-blue)" },
+              { icon: "Shield", title: "Только твои файлы", desc: "Каждый аккаунт видит только свои файлы. Полная приватность.", color: "var(--neon-purple)" },
             ].map((feat, i) => (
               <div key={i} className="glass glass-hover rounded-2xl p-7">
                 <div className="w-12 h-12 rounded-xl mb-5 flex items-center justify-center" style={{ background: `${feat.color}15` }}>
                   <Icon name={feat.icon} size={22} style={{ color: feat.color }} />
                 </div>
-                <h3 className="text-lg font-semibold mb-2" style={{ fontFamily: "Oswald, sans-serif", letterSpacing: "0.03em" }}>{feat.title}</h3>
+                <h3 className="text-lg font-semibold mb-2" style={{ fontFamily: "Oswald, sans-serif" }}>{feat.title}</h3>
                 <p className="text-white/45 text-sm leading-relaxed">{feat.desc}</p>
               </div>
             ))}
@@ -326,9 +467,8 @@ export default function Index() {
             <p className="text-white/40 text-sm mb-6">или нажми для выбора</p>
             <div className="flex items-center justify-center gap-3 flex-wrap">
               {["PDF", "JPG", "PNG", "MP4", "ZIP", "DOCX"].map(ext => (
-                <span key={ext} className="text-xs px-3 py-1 rounded-full" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.4)" }}>
-                  {ext}
-                </span>
+                <span key={ext} className="text-xs px-3 py-1 rounded-full"
+                  style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.4)" }}>{ext}</span>
               ))}
             </div>
           </div>
@@ -350,20 +490,6 @@ export default function Index() {
               </div>
             </div>
           )}
-
-          <div className="grid grid-cols-2 gap-4 mt-8 animate-fade-in delay-300">
-            {[
-              { icon: "HardDrive", text: "До 2 ГБ за один файл", color: "var(--neon-blue)" },
-              { icon: "Lock", text: "Зашифровано и безопасно", color: "var(--neon-green)" },
-              { icon: "Link", text: "Ссылки для шаринга", color: "var(--neon-purple)" },
-              { icon: "Clock", text: "Хранение без срока", color: "#f59e0b" },
-            ].map((tip, i) => (
-              <div key={i} className="glass rounded-xl p-4 flex items-center gap-3">
-                <Icon name={tip.icon} size={16} style={{ color: tip.color }} />
-                <span className="text-sm text-white/60">{tip.text}</span>
-              </div>
-            ))}
-          </div>
         </div>
       )}
 
@@ -377,13 +503,10 @@ export default function Index() {
               </h2>
               <p className="text-white/40 mt-1">{files.length} файлов · {formatSize(totalSize)}</p>
             </div>
-            <button
-              onClick={() => setPage("upload")}
+            <button onClick={() => setPage("upload")}
               className="flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-sm transition-all hover:scale-105"
-              style={{ background: "var(--neon-green)", color: "#0a0e14", boxShadow: "0 0 20px rgba(0,255,136,0.3)" }}
-            >
-              <Icon name="Plus" size={16} />
-              Загрузить
+              style={{ background: "var(--neon-green)", color: "#0a0e14", boxShadow: "0 0 20px rgba(0,255,136,0.3)" }}>
+              <Icon name="Plus" size={16} />Загрузить
             </button>
           </div>
 
@@ -403,23 +526,17 @@ export default function Index() {
               </div>
               <h3 className="text-xl font-semibold mb-2" style={{ fontFamily: "Oswald, sans-serif" }}>Файлов пока нет</h3>
               <p className="text-white/35 text-sm mb-6">Загрузи свой первый файл</p>
-              <button
-                onClick={() => setPage("upload")}
+              <button onClick={() => setPage("upload")}
                 className="flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm transition-all hover:scale-105"
-                style={{ background: "var(--neon-green)", color: "#0a0e14" }}
-              >
-                <Icon name="Upload" size={16} />
-                Загрузить файл
+                style={{ background: "var(--neon-green)", color: "#0a0e14" }}>
+                <Icon name="Upload" size={16} />Загрузить файл
               </button>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {files.map((file, i) => (
-                <div
-                  key={file.id}
-                  className="glass glass-hover rounded-2xl p-5 animate-fade-in"
-                  style={{ animationDelay: `${i * 0.05}s`, animationFillMode: "both", opacity: 0 }}
-                >
+                <div key={file.id} className="glass glass-hover rounded-2xl p-5 animate-fade-in"
+                  style={{ animationDelay: `${i * 0.05}s`, animationFillMode: "both", opacity: 0 }}>
                   <div className="flex items-start gap-4 mb-4">
                     <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
                       style={{ background: `${getFileColor(file.name)}18` }}>
@@ -435,35 +552,23 @@ export default function Index() {
                       </div>
                     )}
                   </div>
-
                   <div className="flex items-center gap-2">
                     {file.shared ? (
-                      <button
-                        onClick={() => copyLink(file)}
+                      <button onClick={() => copyLink(file)}
                         className="flex items-center gap-2 flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all"
-                        style={{
-                          background: copiedId === file.id ? "rgba(0,255,136,0.15)" : "rgba(0,255,136,0.08)",
-                          color: "var(--neon-green)",
-                          border: "1px solid rgba(0,255,136,0.2)"
-                        }}
-                      >
+                        style={{ background: copiedId === file.id ? "rgba(0,255,136,0.15)" : "rgba(0,255,136,0.08)", color: "var(--neon-green)", border: "1px solid rgba(0,255,136,0.2)" }}>
                         <Icon name={copiedId === file.id ? "Check" : "Copy"} size={12} />
                         {copiedId === file.id ? "Скопировано!" : "Скопировать ссылку"}
                       </button>
                     ) : (
-                      <button
-                        onClick={() => handleShare(file.id, file.name)}
+                      <button onClick={() => handleShare(file.id, file.name)}
                         className="flex items-center gap-2 flex-1 px-3 py-2 rounded-lg text-xs font-medium glass transition-all hover:border-white/20"
-                        style={{ color: "rgba(255,255,255,0.6)" }}
-                      >
-                        <Icon name="Share2" size={12} />
-                        Поделиться
+                        style={{ color: "rgba(255,255,255,0.6)" }}>
+                        <Icon name="Share2" size={12} />Поделиться
                       </button>
                     )}
-                    <button
-                      onClick={() => handleDelete(file)}
-                      className="w-8 h-8 rounded-lg glass flex items-center justify-center transition-all hover:border-red-500/30 hover:text-red-400 text-white/40"
-                    >
+                    <button onClick={() => handleDelete(file)}
+                      className="w-8 h-8 rounded-lg glass flex items-center justify-center transition-all hover:border-red-500/30 hover:text-red-400 text-white/40">
                       <Icon name="Trash2" size={14} />
                     </button>
                   </div>
@@ -474,10 +579,12 @@ export default function Index() {
         </div>
       )}
 
-      {/* Delete confirmation modal */}
+      {/* Delete modal */}
       {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }}>
-          <div className="glass rounded-2xl p-8 max-w-sm w-full animate-scale-in" style={{ borderColor: "rgba(255,77,77,0.3)", boxShadow: "0 0 40px rgba(255,77,77,0.1)" }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }}>
+          <div className="glass rounded-2xl p-8 max-w-sm w-full animate-scale-in"
+            style={{ borderColor: "rgba(255,77,77,0.3)", boxShadow: "0 0 40px rgba(255,77,77,0.1)" }}>
             <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-5" style={{ background: "rgba(255,77,77,0.1)" }}>
               <Icon name="Trash2" size={26} style={{ color: "#ff4d4d" }} />
             </div>
@@ -486,20 +593,12 @@ export default function Index() {
               «<span className="text-white/80">{deleteConfirm.name}</span>» будет удалён безвозвратно
             </p>
             <div className="flex gap-3">
-              <button
-                onClick={() => setDeleteConfirm(null)}
-                disabled={deleting}
+              <button onClick={() => setDeleteConfirm(null)} disabled={deleting}
                 className="flex-1 px-4 py-3 rounded-xl text-sm font-semibold glass transition-all hover:border-white/20 disabled:opacity-50"
-                style={{ color: "rgba(255,255,255,0.6)" }}
-              >
-                Отмена
-              </button>
-              <button
-                onClick={confirmDelete}
-                disabled={deleting}
+                style={{ color: "rgba(255,255,255,0.6)" }}>Отмена</button>
+              <button onClick={confirmDelete} disabled={deleting}
                 className="flex-1 px-4 py-3 rounded-xl text-sm font-semibold transition-all hover:scale-105 disabled:opacity-50 flex items-center justify-center gap-2"
-                style={{ background: "#ff4d4d", color: "white", boxShadow: "0 0 20px rgba(255,77,77,0.3)" }}
-              >
+                style={{ background: "#ff4d4d", color: "white", boxShadow: "0 0 20px rgba(255,77,77,0.3)" }}>
                 {deleting ? <Icon name="Loader" size={14} /> : <Icon name="Trash2" size={14} />}
                 {deleting ? "Удаляем..." : "Удалить"}
               </button>

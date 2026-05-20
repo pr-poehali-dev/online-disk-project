@@ -1,10 +1,10 @@
 {
   "tests": [
     {
-      "name": "Delete without ID returns 400",
+      "name": "No auth returns 401",
       "method": "DELETE",
       "path": "/",
-      "expectedStatus": 400
+      "expectedStatus": 401
     }
   ]
 }

@@ -4,10 +4,23 @@ import boto3
 import psycopg2
 
 
+def get_user_id(event: dict) -> str | None:
+    token = (event.get('headers') or {}).get('X-Authorization', '')
+    if token.startswith('Bearer '):
+        parts = token[7:].split(':')
+        if len(parts) == 2:
+            return parts[0]
+    return None
+
+
 def handler(event: dict, context) -> dict:
-    """Удаляет файл из S3 и из базы данных по ID."""
+    """Удаляет файл из S3 и из базы данных, только если файл принадлежит пользователю."""
     if event.get('httpMethod') == 'OPTIONS':
-        return {'statusCode': 200, 'headers': {'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400'}, 'body': ''}
+        return {'statusCode': 200, 'headers': {'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Max-Age': '86400'}, 'body': ''}
+
+    user_id = get_user_id(event)
+    if not user_id:
+        return {'statusCode': 401, 'headers': {'Access-Control-Allow-Origin': '*'}, 'body': json.dumps({'error': 'Требуется авторизация'})}
 
     params = event.get('queryStringParameters') or {}
     file_id = params.get('id')
@@ -18,7 +31,7 @@ def handler(event: dict, context) -> dict:
     schema = os.environ['MAIN_DB_SCHEMA']
     conn = psycopg2.connect(os.environ['DATABASE_URL'])
     cur = conn.cursor()
-    cur.execute(f"SELECT s3_key FROM {schema}.files WHERE id = %s", (file_id,))
+    cur.execute(f"SELECT s3_key FROM {schema}.files WHERE id = %s AND user_id = %s", (file_id, user_id))
     row = cur.fetchone()
 
     if not row:
@@ -27,7 +40,6 @@ def handler(event: dict, context) -> dict:
         return {'statusCode': 404, 'headers': {'Access-Control-Allow-Origin': '*'}, 'body': json.dumps({'error': 'Файл не найден'})}
 
     s3_key = row[0]
-
     s3 = boto3.client(
         's3',
         endpoint_url='https://bucket.poehali.dev',
@@ -36,7 +48,7 @@ def handler(event: dict, context) -> dict:
     )
     s3.delete_object(Bucket='files', Key=s3_key)
 
-    cur.execute(f"DELETE FROM {schema}.files WHERE id = %s", (file_id,))
+    cur.execute(f"DELETE FROM {schema}.files WHERE id = %s AND user_id = %s", (file_id, user_id))
     conn.commit()
     cur.close()
     conn.close()
