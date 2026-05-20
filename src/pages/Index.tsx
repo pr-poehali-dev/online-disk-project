@@ -20,10 +20,11 @@ interface User {
   name: string;
 }
 
-const API_AUTH   = "https://functions.poehali.dev/9328bf48-9ea6-4767-a049-7742f6555962";
-const API_UPLOAD = "https://functions.poehali.dev/94290466-4cfc-4f2d-a557-972f80d884af";
-const API_LIST   = "https://functions.poehali.dev/4f7f5f03-b426-4537-b544-841e547d62ca";
-const API_DELETE = "https://functions.poehali.dev/1f89adf4-3099-43e2-9cee-45da626d0219";
+const API_AUTH     = "https://functions.poehali.dev/9328bf48-9ea6-4767-a049-7742f6555962";
+const API_UPLOAD   = "https://functions.poehali.dev/94290466-4cfc-4f2d-a557-972f80d884af";
+const API_LIST     = "https://functions.poehali.dev/4f7f5f03-b426-4537-b544-841e547d62ca";
+const API_DELETE   = "https://functions.poehali.dev/1f89adf4-3099-43e2-9cee-45da626d0219";
+const API_DOWNLOAD = "https://functions.poehali.dev/b1be158e-0656-478f-ac3e-ee16dc8f97b3";
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} Б`;
@@ -86,6 +87,7 @@ export default function Index() {
   const [notification, setNotification] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<FileItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [authName, setAuthName] = useState("");
@@ -219,6 +221,27 @@ export default function Index() {
     setCopiedId(file.id);
     showNotification("Ссылка скопирована!");
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleDownload = async (file: FileItem) => {
+    setDownloadingId(file.id);
+    try {
+      const res = await fetch(`${API_DOWNLOAD}?id=${file.id}`, { headers: authHeaders(token) });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      const bytes = Uint8Array.from(atob(data.file), c => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: data.mime_type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = data.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      showNotification("Ошибка при скачивании файла");
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   const handleDelete = (file: FileItem) => setDeleteConfirm(file);
@@ -567,6 +590,14 @@ export default function Index() {
                         <Icon name="Share2" size={12} />Поделиться
                       </button>
                     )}
+                    <button
+                      onClick={() => handleDownload(file)}
+                      disabled={downloadingId === file.id}
+                      className="w-8 h-8 rounded-lg glass flex items-center justify-center transition-all hover:border-white/20 hover:text-white/80 text-white/40 disabled:opacity-50"
+                      title="Скачать"
+                    >
+                      <Icon name={downloadingId === file.id ? "Loader" : "Download"} size={14} />
+                    </button>
                     <button onClick={() => handleDelete(file)}
                       className="w-8 h-8 rounded-lg glass flex items-center justify-center transition-all hover:border-red-500/30 hover:text-red-400 text-white/40">
                       <Icon name="Trash2" size={14} />
