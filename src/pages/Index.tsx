@@ -129,7 +129,7 @@ export default function Index() {
               <Icon name="Cloud" size={16} className="text-black" />
             </div>
             <span className="font-bold text-lg tracking-wide" style={{ fontFamily: "Oswald, sans-serif" }}>
-              Cloud<span style={{ color: "var(--neon-green)" }}>Drive</span>
+              AMS<span style={{ color: "var(--neon-green)" }}>Drive</span>
             </span>
           </div>
 
